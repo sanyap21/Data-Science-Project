@@ -1,0 +1,600 @@
+---
+title: "Project"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r echo=FALSE}
+# Installing/Loading Packages and Setting Environment Variables
+# install.packages("rgoodreads")
+# install.packages("dplyr")
+# install.packages("qlcMatrix")
+# install.packages("RColorBrewer", dependencies = TRUE)
+# install.packages(c("NLP", "openNLP", "RWeka", "qdap"))
+# install.packages("openNLPmodels.en", repos = "http://datacube.wu.ac.at/", type = "source")
+# install.packages("klaR")
+library(klaR)
+library('e1071')
+library(Boruta)
+library(syuzhet)
+library(NLP)
+library(randomForest)
+library(openNLP)
+library(RWeka)
+library(magrittr)
+library(RColorBrewer)
+library(ggplot2)
+library(mlbench)
+library(caret)
+library(qlcMatrix)
+library(text2vec)
+library(dplyr)
+library(plyr)
+library(quanteda)
+library(broom)
+library(exploratory)
+library(rJava)
+library(tidytext)
+library(countrycode)
+library(rgeolocate)
+library(XML)
+library(RCurl)
+library(RJSONIO)
+library(rgoodreads)
+library(tm)
+library(igraph)
+library(rpart)
+library(ROCR)
+library(kernlab)
+library(caret)
+library(wordcloud)
+library(base)
+library(ngram)
+library(assertive)
+library(e1071)
+library(RWeka)
+library(SnowballC)
+library(tm)
+library(plyr)
+library(text2vec)
+library(openNLPmodels.en);
+
+# devtools::install_github("exploratory-io/exploratory_func")
+# devtools::install_github(" famguy/rgoodreads")
+
+key <- "##"
+secret <- "##"
+
+Sys.setenv(GOODREADS_KEY = key)
+```
+
+```{r echo=FALSE}
+checkForPresence <- function(varToCheck) {
+  if(!is.na(varToCheck) && varToCheck != "")
+    return(TRUE)
+  else
+    return(FALSE)
+}
+
+sentimentScores <- function(descs) {
+  sentimentDesScore = list()
+  for(i in 1:length(descs)) {
+      sentiScore = list()
+      s_v <- get_sentences(as.character(descs[i]))
+      sentiScore <- get_sentiment(s_v,method="syuzhet")
+      ##Get average of ratings
+      if(length(sentiScore)==0){
+        sentimentDesScore[i]=0
+      }
+      else{
+        sentimentDesScore[i] = Reduce("+", sentiScore) / length(sentiScore)
+      }
+  }
+}
+
+prf <- function(predAct){
+    ## predAct is two col dataframe of pred,act
+    preds = predAct[,1]
+    trues = predAct[,2]
+    xTab <- table(preds, trues)
+    clss <- as.character(sort(unique(preds)))
+    r <- matrix(NA, ncol = 7, nrow = 1, 
+        dimnames = list(c(),c('Acc',
+        paste("P",clss[1],sep='_'), 
+        paste("R",clss[1],sep='_'), 
+        paste("F",clss[1],sep='_'), 
+        paste("P",clss[2],sep='_'), 
+        paste("R",clss[2],sep='_'), 
+        paste("F",clss[2],sep='_'))))
+    r[1,1] <- sum(xTab[1,1],xTab[2,2])/sum(xTab) # Accuracy
+    r[1,2] <- xTab[1,1]/sum(xTab[,1]) # Miss Precision
+    r[1,3] <- xTab[1,1]/sum(xTab[1,]) # Miss Recall
+    r[1,4] <- (2*r[1,2]*r[1,3])/sum(r[1,2],r[1,3]) # Miss F
+    r[1,5] <- xTab[2,2]/sum(xTab[,2]) # Hit Precision
+    r[1,6] <- xTab[2,2]/sum(xTab[2,]) # Hit Recall
+    r[1,7] <- (2*r[1,5]*r[1,6])/sum(r[1,5],r[1,6]) # Hit F
+    r
+}
+
+isPresent <- function (x) {
+  out <- tryCatch(book_by_isbn(x), error = function(e) NULL)
+  return(out)
+}
+
+rightPub <- function(x) {
+  if(x == "Oxford University Press" || x == "Aladdin" || x == "Scholastic" 
+     || x == "Penguin Books" || x == "Warner Books") {
+    return(TRUE)
+  } else {
+    return(FALSE)
+  }
+}
+
+entities <- function(doc, kind) {
+  s <- doc$content
+  a <- annotations(doc)[[1]]
+  if(hasArg(kind)) {
+    k <- sapply(a$features, `[[`, "kind")
+    s[a[k == kind]]
+  } else {
+    s[a[a$type == "entity"]]
+  }
+}
+
+removeURL <- function(x) gsub('http.*\\s*', '', x)
+
+generateDocumentTermMatrix <- function(features, ng) {
+  corpus <- Corpus(VectorSource(features)) # create corpus for features
+  
+  corpus <- tm_map(corpus, content_transformer(removeURL)) # remove all URL's
+  corpus <- tm_map(corpus, removeWords, stopwords("english")) # remove all stopwords
+  corpus <- tm_map(corpus, stemDocument, language="en") # stem all words in the document
+  corpus <- tm_map(corpus, content_transformer(tolower)) # change to lowercase
+  corpus <- tm_map(corpus, removeNumbers) # remove all numbers
+  corpus <- tm_map(corpus, removePunctuation) # remove all punctuations
+  corpus <- tm_map(corpus, stripWhitespace) # strip all white spaces
+  
+  options(mc.cores=1) # RWeka has a problem with parallel threads
+  ngramTokenizer <- function(x) NGramTokenizer(x, Weka_control(min = ng, max = ng)) # create n-grams
+  dtm <- DocumentTermMatrix(corpus, control = list(tokenize = ngramTokenizer)) # create Document Term Matrix
+  return(dtm)
+}
+```
+
+
+```{r pressure, echo=FALSE}
+# DATA Cleaning
+booksData <- read.csv("BX-Books.csv", header=TRUE, stringsAsFactors = TRUE,sep=";")
+# booksRatings <- read.csv("BX-Book-Ratings.csv" , header=TRUE, stringsAsFactors = TRUE,sep=";")
+# booksUsers <- read.csv("BX-Users.csv", header=TRUE, stringsAsFactors = TRUE, sep=";")
+# booksSummary <- read.csv("booksummaries.txt", sep="\t", header=FALSE)
+
+colnames(booksData) <- c("ISBN", "Title", "Author", "Year", "Publisher", 
+                         "SmallURL", "MediumURL", "LargeURL")
+
+booksData$SmallURL <- NULL
+booksData$MediumURL <- NULL
+booksData$LargeURL <- NULL
+
+# colnames(booksRatings) <- c("UserId", "ISBN", "Rating")
+# colnames(booksUsers) <- c("UserId", "Location", "Age")
+
+# colnames(booksSummary) <- c("Wikipedia ID", "Freebase ID", "Title",
+  #                           "Author", "Year", "Genre",
+    #                         "PlotSummary")
+
+
+#booksSummary$`Wikipedia ID` <- NULL
+#booksSummary$`Freebase ID` <- NULL
+#booksSummary$Year <- NULL
+#booksSummary$Author <- NULL
+
+#MergedBooksData <- merge(booksData, booksSummary, by="Title")
+
+# Remove redundancy in the data
+#MergedBooksData$Publisher[MergedBooksData$Publisher == "Dell Publishing Company"] <- "Dell"
+#MergedBooksData$Publisher[MergedBooksData$Publisher == "Penguin USA"] <- "Penguin Books Ltd"
+#MergedBooksData$Publisher[MergedBooksData$Publisher == "Vintage Books USA"] <- "Vintage"
+#MergedBooksData$Publisher[MergedBooksData$Publisher == "Warner Books Inc"] <- "Warner Books"
+
+# Filter dataframe on desired Publishers
+#MergedBooksData <- subset(MergedBooksData, (Publisher == "Dell" | Publisher == "Vintage" | 
+ #                                             Publisher == "Warner Books" | Publisher == "Penguin Books Ltd" |
+  #                                            Publisher == "Ballantine Books"))
+
+#UniqueAuthors = unique(MergedBooksData$Author)
+
+# 2. Number of Unique Authors and Publishers in merged data
+# 3. Distribution of Genres (First clean Genre). Then quantitatively express them
+# 4. Assign author id to each author
+# 5. Try to find corelation matrix between
+# 6. For Books Data Frame, we have too many publishers, so we need some filtering on it
+# 7. For merged data frame too, we can filter out top publishers, so that we ensure we have enough data
+# 8. Plot for number of books published/year
+# 9. Use the api and fill missing details.
+# 10. Features - description, title(text features), author, average-ratings, numberofreviews, textreviews
+#     count, numofpages, author
+# 11. To work with we need to create a rich dataset with sufficient training/test set.
+
+
+# result<-getURL("https:// openlibrary.org/api/books? bibkeys=ISBN:9780980200447& jscmd=details&format=json")
+
+
+#b = book_by_isbn('0195153448')
+#isbn List create fron book data
+
+# ISBNList<- unique(unlist(booksData$ISBN))
+##rownames(booksData) <- booksData$ISBN
+##getting data from goodreads API
+#booksData[c(0195153448),]
+#booksData[1,]
+
+# Getting Subset of Books for Top 5 Publishers
+subsetOfBooks = subset(booksData, Publisher == "Oxford University Press")
+subsetOfBooks = rbind(subsetOfBooks, subset(booksData, Publisher == "Aladdin"))
+subsetOfBooks = rbind(subsetOfBooks, subset(booksData, Publisher == "Warner Books"))
+subsetOfBooks = rbind(subsetOfBooks, subset(booksData, Publisher == "Penguin Books"))
+subsetOfBooks = rbind(subsetOfBooks, subset(booksData, Publisher == "Scholastic"))
+
+ISBNList = unique(unlist(subsetOfBooks$ISBN))
+
+goodReadsDF <- data.frame(ISBN = character(1), Description = character(1), Avg_Rating = character(1), 
+                 Num_Pages = character(1), Ratings_Count = character(1), Text_Reviews_Count = character(1),
+                 stringsAsFactors = FALSE)
+temp = 0
+for(i in 1:nrow(subsetOfBooks)) {
+  varList=isPresent(ISBNList[i])
+  
+  if(!is.null(varList) && length(varList) == 27) {
+    temp=temp+1
+    varList$title <- NULL
+    varList$id <- NULL
+    varList$isbn13 <- NULL
+    varList$asin <- NULL
+    varList$kindle_asin <- NULL
+    varList$marketplace_id <- NULL
+    varList$country_code <- NULL
+    varList$image_url <- NULL
+    varList$small_image_url <- NULL
+    varList$publication_year <- NULL
+    varList$publication_month <- NULL
+    varList$publication_day <- NULL
+    varList$publisher <- NULL
+    varList$language_code <- NULL
+    varList$is_ebook <- NULL
+    varList$format <- NULL
+    varList$edition_information <- NULL
+    varList$url <- NULL
+    varList$link <- NULL
+    varList$authors <- NULL
+    varList$rating_dist <- NULL
+
+    colnames(varList) <- c("ISBN", "Description", "Avg_Rating", "Num_Pages", "Ratings_Count",
+                           "Text_Reviews_Count")
+    print(temp)
+    goodReadsDF[temp, ] = varList
+  }
+}
+
+MergedDF <- merge(subsetOfBooks, goodReadsDF, by="ISBN")
+MergedDF = MergedDF[!(duplicated(MergedDF$ISBN) | duplicated(MergedDF$ISBN, fromLast = TRUE)), ]
+rownames(MergedDF) <- NULL
+
+count(MergedDF$Publisher == "Oxford University Press") #465
+count(MergedDF$Publisher == "Aladdin") #374
+count(MergedDF$Publisher == "Scholastic") #1212
+count(MergedDF$Publisher == "Penguin Books") #0
+count(MergedDF$Publisher == "Warner Books") #1127
+
+# Write to a new file, so that data-processing stage is not repeated anymore
+write.csv(MergedDF, file = "Books.csv")
+```
+
+```{r echo=FALSE}
+# Data Clustering for Similarity of books. Idea = Clustering Based on TF-IDF and Cosine Similarity
+
+# 1. Data Cleaning and Preparation
+booksData <- read.csv("Books.csv")
+
+# Removing Books with Empty Description. Should be done in data cleaning stage
+booksData <- booksData[!(is.na(booksData$Description) | booksData$Description == ""),]
+booksData$X <- NULL
+
+booksDescription <- subset(booksData, select = c("ISBN", "Description"))
+
+ # Tokenizing text
+tokenizedText = do_tokenize(booksDescription, "Description")
+rownames(tokenizedText) <- NULL
+
+# Visualizing on number of words doesent make sense, since this is just a description of the book. 
+# Since it is not the actual content. Anyway below is the plot for document vs #words
+# One thing we can see is that, most descriptions are almost of same length.
+plot(count(tokenizedText$document_id), type = "l")
+
+ # Removing Stop Words and <br>
+tokenizedText = subset(tokenizedText, !is_stopword(tokenizedText$token))
+tokenizedText = subset(tokenizedText, !(tokenizedText$token == "br"))
+plot(count(tokenizedText$document_id), type = "l")
+
+# Removing numbers since they can be noisy data. And For books it should be more intuitive to use just text
+tokenizedText = subset(tokenizedText, is_alphabet(tokenizedText$token))
+plot(count(tokenizedText$document_id), type = "l")
+
+# Stem the tokens
+tokenizedText = mutate(tokenizedText, token_stem = stem_word(tokenizedText$token))
+tokenizedText$token <- NULL
+
+# Construct n-grams. We will experiment with 1,2,and 3 grams
+tokenizedText = do_ngram(tokenizedText, "token_stem", "document_id", "sentence_id", maxn = 3)
+
+
+# 2. Generating TF-IDF values for grams. These scores signify importance of each word in each document
+uniGramTFIDF <- do_tfidf(tokenizedText, "document_id", "token_stem")
+biGramTFIDF <- do_tfidf(tokenizedText, "document_id", "gram2")
+triGramTFIDF <- do_tfidf(tokenizedText, "document_id", "gram3")
+
+# Removing grams that occur only in one dpcument
+uniGramTFIDF <- uniGramTFIDF[uniGramTFIDF$count_of_docs > 1, ]
+biGramTFIDF <- biGramTFIDF[biGramTFIDF$count_of_docs > 1, ]
+triGramTFIDF <- triGramTFIDF[triGramTFIDF$count_of_docs > 1, ]
+
+# 3. Next we need to find cosine similarity between points for clustering
+cosineForUniGrams <- do_cosine_sim.kv(uniGramTFIDF, "document_id", "token_stem", "tfidf")
+cosineForBiGrams <- do_cosine_sim.kv(biGramTFIDF, "document_id", "gram2", "tfidf")
+cosineForTriGrams <- do_cosine_sim.kv(triGramTFIDF, "document_id", "gram3", "tfidf")
+
+# 4. Creating features for each document/book. Using a very high threshold. Because we are comparing summaries/description, not the actual content, so if the summary is very highly corelated we use that. For each book we take the number of books that are similar to current book and then normalize this number
+freshNessFeature <- list()
+threshold <- 0.9
+for(i in 1:nrow(booksData)) {
+  # Lets take the unigrams here, and then experiment with others
+  subs = subset(cosineForUniGrams, cosineForUniGrams$document_id.x == i)
+  freshNessFeature[i] = nrow(subs[subs$value >= threshold, ])
+}
+
+booksData$freshNessFeature <- freshNessFeature
+newBooksData <- data.frame(lapply(booksData, as.character), stringsAsFactors=FALSE)
+
+# write.csv(newBooksData, file = "BooksWithFreshness.csv")
+
+# Observation - Max this freshness feature is 2
+```
+
+```{r echo=FALSE}
+# Named Entity Recognition for Total Characters in the plot
+booksData <- read.csv("BooksWithFreshness.csv")
+
+booksData <- booksData[!(is.na(booksData$Description) | booksData$Description == ""),]
+booksData$X <- NULL
+
+booksDescription <- subset(booksData, select = c("ISBN", "Description"))
+
+word_ann <- Maxent_Word_Token_Annotator()
+sent_ann <- Maxent_Sent_Token_Annotator()
+person_ann <- Maxent_Entity_Annotator(kind = "person")
+
+pipeline <- list(sent_ann, word_ann, person_ann)
+text = booksData$Description
+
+persons = list()
+for (i in 1:length(text)) {
+  t = as.String(text[i])
+  an = NLP::annotate(t, pipeline)
+  doc = AnnotatedPlainTextDocument(t, an)
+  persns = unique(entities(doc, "person"))
+  print(length(persns))
+  persons[i] = length(persns)
+}
+
+booksData$characters = persons
+newBooksData <- data.frame(lapply(booksData, as.character), stringsAsFactors=FALSE)
+
+write.csv(newBooksData, file = "BooksWithFreshnessAndPersons.csv")
+```
+
+```{r echo=FALSE}
+# Obscene Words Counter. Counts the number of obscene words in the description
+# Problem with Swear Words is that, we just have description not actual stories and this is actually subjective, since some genres prefer to have those. Even if we use this feature, most of the points would be 0
+
+booksData <- read.csv("BooksWithFreshnessAndPersons.csv")
+booksData <- booksData[!(is.na(booksData$Description) | booksData$Description == ""),]
+booksData$X <- NULL
+
+swearWords <- read.table("swearWords", sep = "\n", stringsAsFactors = FALSE)
+colnames(swearWords) <- c("SwearWords")
+
+swearWordsList = list()
+
+```
+
+```{r echo=FALSE}
+# Loading Author's and its Previous Books Score
+authorData <- read.csv("AuthorData.csv", stringsAsFactors = FALSE)
+authorBooksScore <- read.csv("AuthorBooksScore.csv", stringsAsFactors = FALSE)
+colnames(authorBooksScore) <- c("Previous_Books_Score") # Approximating to most recent 10 books
+
+authorData$PreviousBooksScore <- authorBooksScore$Previous_Books_Score
+newAuthorData <- data.frame(lapply(authorData, as.character), stringsAsFactors=FALSE)
+
+write.csv(newAuthorData, file = "FinalAuthorData.csv")
+```
+
+```{r echo=FALSE}
+# Data Merging for classification
+booksData <- read.csv("BooksWithFreshnessAndPersons.csv", stringsAsFactors = FALSE)
+authorData <- read.csv("FinalAuthorData.csv", stringsAsFactors = FALSE)
+
+authorFansCount = list()
+authorRatings = list()
+authorWorksCount = list()
+for(i in 1:nrow(booksData)) {
+  author = booksData$Author[i]
+  print(author)
+  if(length(authorData$ID[authorData$Name == author]) == 0) {
+    authorFansCount[i] = NA
+    authorRatings[i] = NA
+    authorWorksCount[i] = NA
+  } else {
+    authorFansCount[i] = authorData$AuthorFollowerCount[authorData$Name == author]
+    authorRatings[i] = authorData$PreviousBooksScore[authorData$Name == author]
+    authorWorksCount[i] = authorData$WorksCount[authorData$Name == author]
+  }
+}
+
+booksData$AuthorFansCount <- authorFansCount
+booksData$AuthorRatings <- authorRatings
+booksData$AuthorWorksCount <- authorWorksCount
+
+
+uniqueNAAuthors = unique(booksData$Author[is.na(booksData$AuthorFansCount)])
+
+finalBooksData <- booksData[!is.na(booksData$AuthorWorksCount),]
+```
+
+```{r echo=FALSE}
+finalBooksData <- read.csv("BookSentiScore.csv", stringsAsFactors = FALSE)
+finalBooksData <- finalBooksData[!is.na(finalBooksData$AuthorWorksCount),]
+finalBooksData <- finalBooksData[!is.na(finalBooksData$Num_Pages),]
+finalBooksData$X.1 <- NULL
+finalBooksData$X <- NULL
+
+dummy = finalBooksData$Publisher
+dummy[dummy == "Aladdin"] <- 1
+dummy[dummy == "Scholastic"] <- 2
+dummy[dummy == "Oxford University Press"] <- 3
+dummy[dummy == "Warner Books"] <- 4
+
+numericOutputTags <- as.factor(dummy)
+outputTags <- as.factor(finalBooksData$Publisher)
+
+# No n-grams consideration in classification
+# Features Considered
+# 1. Number of Pages
+# 2. Freshness of the Book
+# 3. Number of noun characters in the book
+# 4. Author Fans Count
+# 5. Author Ratings
+# 6. Author Works Count
+
+dfWithFeatures = as.data.frame(finalBooksData)
+dfWithFeatures$X <- NULL
+dfWithFeatures$ISBN <- NULL
+dfWithFeatures$Title <- NULL
+dfWithFeatures$Author <- NULL
+dfWithFeatures$Year <- NULL
+dfWithFeatures$Publisher <- NULL
+dfWithFeatures$Description <- NULL
+dfWithFeatures$Avg_Rating <- NULL
+dfWithFeatures$Ratings_Count <- NULL
+dfWithFeatures$Text_Reviews_Count <- NULL
+dfWithFeatures$X.1 <- NULL
+
+# Feature Engineering
+# 1. Identifying features that are highly co-related or redundant
+corelationMatrix <- cor(dfWithFeatures)
+highlyCorrelated <- findCorrelation(corelationMatrix, cutoff=0.5)
+
+# 2. Rank Features based on importance
+randomForestModel <- randomForest(outputTags~., data = dfWithFeatures)
+imp <- varImp(randomForestModel)
+varImpPlot(randomForestModel, type = 2)
+
+# Very basic SVM with C-Type Classification and 10 fold cross-validation
+model1 <- svm(outputTags~., data=dfWithFeatures, type = 'C-classification', kernel = 'linear', cross=10)
+model2 <- svm(outputTags~., data=dfWithFeatures, type = 'C-classification', kernel = 'radial', cross=10)
+
+# Below two kernels have very very low accuracy
+model3 <- svm(outputTags~., data=dfWithFeatures, type = 'C-classification', kernel = 'polynomial', cross=10)
+model4 <- svm(outputTags~., data=dfWithFeatures, type = 'C-classification', kernel = 'sigmoid', cross=10)
+
+# Naive Bayes Model
+model5 <- NaiveBayes(outputTags ~ ., data = dfWithFeatures)
+
+# Traditional 80:20 train-test split
+
+## 80% of the sample size
+dfWithFeatures = as.data.frame(finalBooksData)
+smp_size <- floor(0.80 * nrow(dfWithFeatures))
+
+## set the seed to make your partition reproductible
+set.seed(123)
+train_ind <- sample(seq_len(nrow(dfWithFeatures)), size = smp_size)
+
+train <- dfWithFeatures[train_ind, ]
+test <- dfWithFeatures[-train_ind, ]
+trainTags <- as.factor(train$Publisher)
+testTags <- as.factor(test$Publisher)
+
+train$X <- NULL
+train$ISBN <- NULL
+train$Title <- NULL
+train$Author <- NULL
+train$Year <- NULL
+train$Publisher <- NULL
+train$Description <- NULL
+train$Avg_Rating <- NULL
+train$Ratings_Count <- NULL
+train$Text_Reviews_Count <- NULL
+train$X.1 <- NULL
+
+model2 <- svm(train, trainTags, type="C-classification")
+
+test$X <- NULL
+test$ISBN <- NULL
+test$Title <- NULL
+test$Author <- NULL
+test$Year <- NULL
+test$Publisher <- NULL
+test$Description <- NULL
+test$Avg_Rating <- NULL
+test$Ratings_Count <- NULL
+test$Text_Reviews_Count <- NULL
+test$X.1 <- NULL
+
+prediction <- predict(model2, test)
+predictionAndActual <- data.frame(prediction, testTags)
+predictionAndActual$pred <- prediction
+predictionAndActual$act <- testTags
+colnames(predictionAndActual) <- c("pred", "act")
+
+prf(predictionAndActual)
+# Observation - Precision of Alladin is not good because its training data is not much
+
+confusionMatrix <- table(pred = prediction, true = testTags)
+
+
+# Adding n-grams as features
+booksDescription <- finalBooksData$Description
+OneGramDTM = generateDocumentTermMatrix(booksDescription, 1)
+OneGramFeatures = OneGramDTM$dimnames$Terms
+OneGramDF <- data.frame(outputTags, as.matrix(OneGramDTM))
+
+# Add the previous columns to ngram dataset
+OneGramDF$fressness <- dfWithFeatures$freshNessFeature
+OneGramDF$authorFansCount <- dfWithFeatures$AuthorFansCount
+OneGramDF$authorWorksCount <- dfWithFeatures$AuthorWorksCount
+OneGramDF$characters <- dfWithFeatures$characters
+OneGramDF$numPages <- dfWithFeatures$Num_Pages
+OneGramDF$authorRatings <- dfWithFeatures$AuthorRatings
+
+OneGramDF <- data.frame(lapply(OneGramDF, as.character), stringsAsFactors=FALSE)
+OneGramDF$outputTags <- NULL
+OneGramDF <- sapply(OneGramDF, as.numeric) # Convert everything to numeric
+
+# Removing Redundant Features
+corelationMatrix <- cor(OneGramDF)
+highlyCorrelated <- findCorrelation(corelationMatrix, cutoff=0.5)
+
+sub <- subset(OneGramDF, select = -highlyCorrelated)
+
+# So n-grams also do not help much. Still the most significant features are the same as before
+randomForestModel <- randomForest(outputTags~., data = sub)
+imp <- varImp(randomForestModel)
+varImpPlot(randomForestModel, type = 2)
+
+model3 <- svm(outputTags~., data=sub, type = 'C-classification', kernel = 'linear', cross=10)
+```
+}
